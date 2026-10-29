@@ -81,6 +81,7 @@
   let state = 'title';         // title | play | over
   const shown = {};
   let speedRandom = false;     // switched on at the 25-layer event
+  let testMode = false;        // Konami code: always-perfect drops
   let emergency = false, sirenT = 0, sirenHi = false;   // red alert + shake from 25 layers on
   let blocks, cur, chunks, crumbs, floaters, camY, camTarget, combo, score, perfects, shake, t = 0, overT = 0;
 
@@ -121,6 +122,7 @@
 
   function release() {
     const top = blocks[blocks.length - 1];
+    if (testMode) cur.x = top.x;                          // test mode: every drop lands perfectly
     const overlap = Math.min(cur.x + cur.w, top.x + top.w) - Math.max(cur.x, top.x);
     cur.wy = HOVER_Y - camY; cur.vy = 0;
     cur.miss = overlap <= 0;
@@ -283,7 +285,7 @@
 
   function gameOver() {
     state = 'over'; overT = 0;
-    if (score > best) { best = score; try { localStorage.setItem('medovikBest', best); } catch (e) {} }
+    if (score > best && !testMode) { best = score; try { localStorage.setItem('medovikBest', best); } catch (e) {} }
   }
 
   function press() {
@@ -291,6 +293,17 @@
     else if (state === 'play') { if (cur && cur.mode === 'slide') release(); }
     else if (state === 'over' && overT > 0.6) { reset(); state = 'play'; }
   }
+  // Konami code (up up down down left right left right B A) toggles test mode
+  const KONAMI = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'KeyB', 'KeyA'];
+  let konamiPos = 0, testToastT = 0;
+  addEventListener('keydown', e => {
+    if (e.repeat) return;
+    konamiPos = e.code === KONAMI[konamiPos] ? konamiPos + 1 : (e.code === KONAMI[0] ? 1 : 0);
+    if (konamiPos === KONAMI.length) {
+      konamiPos = 0; testMode = !testMode; testToastT = 2;
+      beep(testMode ? 880 : 330, 0.25, 'triangle', 0.08);
+    }
+  });
   addEventListener('keydown', e => {
     if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); if (!e.repeat) press(); }
     if (e.code === 'KeyM') muted = !muted;
@@ -582,6 +595,14 @@
       beam.addColorStop(0, 'rgba(255,60,60,.28)'); beam.addColorStop(1, 'rgba(255,60,60,0)');
       ctx.fillStyle = beam; ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(14, 0); ctx.lineTo(260, H * 1.2); ctx.lineTo(-260, H * 1.2); ctx.closePath(); ctx.fill();
       ctx.restore();
+    }
+
+    if (testMode) text('TEST MODE', 16, H - 14, 14, '#7dffb0', 'left');
+    if (testToastT > 0) {
+      testToastT -= 1 / 60;
+      ctx.globalAlpha = Math.min(1, testToastT * 2);
+      text(testMode ? 'Test mode ON' : 'Test mode OFF', W / 2, 110, 24, testMode ? '#7dffb0' : '#ff9a9a');
+      ctx.globalAlpha = 1;
     }
 
     // HUD
