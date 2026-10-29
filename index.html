@@ -24,7 +24,16 @@
     background: #ffd23f; color: #3a2208;
   }
   #toast button:hover { background: #ffe27a; }
-  #toast button.alt { background: #4b3a7a; color: #fff; }
+  #toast button.alt, button.runaway { background: #4b3a7a; color: #fff; }
+  button.runaway {
+    position: fixed; z-index: 12; font: bold 16px Georgia, serif; padding: 9px 18px; border-radius: 8px; border: 0;
+    cursor: pointer; max-width: 300px; transition: left .16s ease-out, top .16s ease-out;
+  }
+  .ha {
+    position: fixed; z-index: 11; pointer-events: none; font: bold 20px Georgia, serif; color: #ff5d5d;
+    text-shadow: 0 2px 0 #000; white-space: nowrap; animation: haFade 1.4s forwards;
+  }
+  @keyframes haFade { from { opacity: 1; transform: translateY(0) rotate(var(--r)); } to { opacity: 0; transform: translateY(-18px) rotate(var(--r)); } }
 </style>
 </head>
 <body>
@@ -71,6 +80,8 @@
   try { best = +localStorage.getItem('medovikBest') || 0; } catch (e) {}
   let state = 'title';         // title | play | over
   const shown = {};
+  let speedRandom = false;     // switched on at the 25-layer event
+  let emergency = false, sirenT = 0, sirenHi = false;   // red alert + shake from 25 layers on
   let blocks, cur, chunks, crumbs, floaters, camY, camTarget, combo, score, perfects, shake, t = 0, overT = 0;
 
   const rand = (a, b) => a + Math.random() * (b - a);
@@ -80,7 +91,7 @@
   function reset() {
     blocks = [{ x: (W - BASE_W) / 2, w: BASE_W, seed: 1, squash: 0 }];
     chunks = []; crumbs = []; floaters = [];
-    shown[15] = shown[20] = false;
+    shown[15] = shown[20] = shown[25] = false; speedRandom = false; emergency = false;
     camY = 0; combo = 0; score = 0; perfects = 0; shake = 0;
     updateCamTarget(); camY = camTarget;
     spawn();
@@ -97,7 +108,8 @@
     cur = {
       mode: 'slide', w: top.w, x: 0, seed: n * 7 + 3, age: 0,
       phase: n % 2 ? -Math.PI / 2 : Math.PI / 2, wy: 0, vy: 0,
-      hd: n % 2 ? -1 : 1, knifeOff: 0, miss: false             // hd = side the knife handle is on
+      hd: n % 2 ? -1 : 1, knifeOff: 0, miss: false,            // hd = side the knife handle is on
+      mul: 1, mulT: 1, mulTimer: 0                             // random speed wobble (after 25 layers)
     };
     slideX();
   }
@@ -185,18 +197,66 @@
     state = 'toast';
     toastEl.querySelector('h2').textContent = title;
     toastEl.querySelector('p').textContent = msg;
+    clearRunner();
     const box = toastEl.querySelector('.btns'); box.innerHTML = '';
     buttons.forEach((b, i) => {
       const el = document.createElement('button');
       el.textContent = b.label; if (i > 0) el.className = 'alt';
-      el.onclick = () => { el.blur(); b.fn(); };
+      if (b.run) {                                       // the button that can't be clicked
+        runner = el;
+        el.addEventListener('pointerdown', e => { e.preventDefault(); flee(e.clientX, e.clientY); });
+        el.addEventListener('focus', () => { el.blur(); flee(innerWidth / 2, innerHeight / 2); });
+      } else el.onclick = () => { el.blur(); b.fn(); };
       box.appendChild(el);
     });
     toastEl.classList.add('show');
     if (box.firstChild) box.firstChild.focus();
     beep(660, 0.15, 'triangle', 0.08);
   }
-  function resume() { toastEl.classList.remove('show'); state = 'play'; }
+  function resume() { toastEl.classList.remove('show'); clearRunner(); state = 'play'; }
+
+  // runaway button with a "HA HA HA" trail
+  let runner = null;
+  function clearRunner() {
+    if (runner) runner.remove();
+    runner = null;
+    document.querySelectorAll('.ha').forEach(e => e.remove());
+  }
+  function laugh(x, y) {
+    const s = document.createElement('span');
+    s.className = 'ha'; s.textContent = 'HA HA HA';
+    s.style.left = x + 'px'; s.style.top = y + 'px'; s.style.setProperty('--r', rand(-20, 20) + 'deg');
+    document.body.appendChild(s);
+    setTimeout(() => s.remove(), 1400);
+  }
+  function flee(cx, cy) {
+    if (!runner) return;
+    let r = runner.getBoundingClientRect();
+    if (runner.parentNode !== document.body) {           // lift out of the toast so it can roam the whole window
+      runner.classList.add('runaway');
+      runner.style.left = r.left + 'px'; runner.style.top = r.top + 'px';
+      document.body.appendChild(runner);
+      r = runner.getBoundingClientRect();
+    }
+    const bw = r.width, bh = r.height, m = 12;
+    let best = null, bestD = -1;
+    for (let i = 0; i < 24; i++) {                       // pick the random spot farthest from the cursor
+      const x = rand(m, Math.max(m + 1, innerWidth - bw - m)), y = rand(m, Math.max(m + 1, innerHeight - bh - m));
+      const d = Math.hypot(x + bw / 2 - cx, y + bh / 2 - cy);
+      if (d > bestD) { bestD = d; best = { x, y }; }
+    }
+    for (let i = 0; i < 6; i++) {                        // trail along the escape path
+      const f = i / 5;
+      setTimeout(() => laugh(r.left + (best.x - r.left) * f, r.top + (best.y - r.top) * f), i * 25);
+    }
+    runner.style.left = best.x + 'px'; runner.style.top = best.y + 'px';
+    beep(900 + Math.random() * 300, 0.07, 'square', 0.04);
+  }
+  document.addEventListener('pointermove', e => {
+    if (!runner) return;
+    const r = runner.getBoundingClientRect(), pad = 70;
+    if (e.clientX > r.left - pad && e.clientX < r.right + pad && e.clientY > r.top - pad && e.clientY < r.bottom + pad) flee(e.clientX, e.clientY);
+  });
   function closeGame() {
     state = 'closed';
     try { window.close(); } catch (e) {}
@@ -211,6 +271,12 @@
       showToast("Don't you have a job to do?", '', [
         { label: 'Yes I do', fn: () => { showToast('Nerd.', '', []); setTimeout(closeGame, 1800); } },
         { label: 'Mind ya business', fn: resume }
+      ]);
+    } else if (n === 25 && !shown[25]) {
+      shown[25] = true; emergency = true;
+      showToast('Is this really a productive use of your time?', '', [
+        { label: 'Yes', fn: () => { speedRandom = true; resume(); } },
+        { label: "No you're right I should get back to work", run: true }
       ]);
     }
   }
@@ -393,7 +459,12 @@
     if (state === 'play' && cur) {
       if (cur.mode === 'slide') {
         cur.age += dt;
-        cur.phase += (peakSpeed(blocks.length) / (W / 2)) * dt;
+        if (speedRandom) {
+          cur.mulTimer -= dt;
+          if (cur.mulTimer <= 0) { cur.mulT = rand(0.5, 1.7); cur.mulTimer = rand(0.25, 0.9); }
+          cur.mul += (cur.mulT - cur.mul) * Math.min(1, dt * 8);
+        }
+        cur.phase += (peakSpeed(blocks.length) * cur.mul / (W / 2)) * dt;
         slideX();
       } else if (cur.mode === 'slip') {
         cur.knifeOff += 2800 * dt;
@@ -406,6 +477,10 @@
       }
     }
     if (state === 'over') overT += dt;
+    if (emergency && (state === 'play' || state === 'toast')) {      // siren
+      sirenT -= dt;
+      if (sirenT <= 0) { sirenT = 0.45; sirenHi = !sirenHi; beep(sirenHi ? 880 : 620, 0.4, 'sawtooth', 0.035); }
+    }
     camY += (camTarget - camY) * (1 - Math.exp(-dt * 6));
     shake = Math.max(0, shake - dt * 24);
     for (const b of blocks) if (b.squash > 0) b.squash = Math.max(0, b.squash - dt * 4);
@@ -421,7 +496,8 @@
     const k = canvas.width / W;
     ctx.setTransform(k, 0, 0, k, 0, 0);
     ctx.save();
-    if (shake > 0.2) ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+    const sh = shake + (emergency ? 5 : 0);
+    if (sh > 0.2) ctx.translate((Math.random() - 0.5) * sh, (Math.random() - 0.5) * sh);
 
     drawBackground();
 
@@ -492,6 +568,21 @@
 
     drawBee(W / 2 + Math.sin(t * 0.8) * 190, 190 + Math.sin(t * 1.7) * 30 + Math.cos(t * 0.5) * 20, t);
     ctx.restore();
+
+    // emergency red light: pulsing wash, vignette and a sweeping beacon beam
+    if (emergency && (state === 'play' || state === 'toast')) {
+      const p = 0.5 + 0.5 * Math.sin(t * 7);
+      ctx.fillStyle = `rgba(255,0,0,${0.08 + 0.14 * p})`; ctx.fillRect(0, 0, W, H);
+      const v = ctx.createRadialGradient(W / 2, H / 2, H * 0.25, W / 2, H / 2, H * 0.75);
+      v.addColorStop(0, 'rgba(255,0,0,0)'); v.addColorStop(1, `rgba(255,0,0,${0.35 + 0.35 * p})`);
+      ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+      ctx.save();
+      ctx.translate(W / 2, -20); ctx.rotate(Math.sin(t * 2.2) * 0.9);
+      const beam = ctx.createLinearGradient(0, 0, 0, H * 1.2);
+      beam.addColorStop(0, 'rgba(255,60,60,.28)'); beam.addColorStop(1, 'rgba(255,60,60,0)');
+      ctx.fillStyle = beam; ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(14, 0); ctx.lineTo(260, H * 1.2); ctx.lineTo(-260, H * 1.2); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
 
     // HUD
     if (state === 'play' || state === 'over') {
