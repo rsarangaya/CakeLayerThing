@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -7,7 +7,7 @@
 <style>
   html, body { margin: 0; height: 100%; background: #1b1530; overflow: hidden; font-family: Georgia, "Times New Roman", serif; }
   body { display: flex; align-items: center; justify-content: center; }
-  canvas { height: 100vh; max-width: 100vw; aspect-ratio: 480 / 720; touch-action: none; display: block; cursor: pointer; }
+  canvas { width: min(100vw, calc(100vh * 2 / 3)); width: min(100vw, calc(100dvh * 2 / 3)); height: auto; aspect-ratio: 480 / 720; touch-action: none; display: block; cursor: pointer; }
   #toast {
     position: fixed; left: 50%; top: 22%; transform: translate(-50%, -30px); opacity: 0; pointer-events: none;
     width: min(340px, 86vw); box-sizing: border-box; padding: 20px 22px 18px; text-align: center;
@@ -34,11 +34,38 @@
     text-shadow: 0 2px 0 #000; white-space: nowrap; animation: haFade 1.4s forwards;
   }
   @keyframes haFade { from { opacity: 1; transform: translateY(0) rotate(var(--r)); } to { opacity: 0; transform: translateY(-18px) rotate(var(--r)); } }
+  #toast .body { margin: 0 0 14px; max-height: 46vh; overflow: auto; color: #ffe9b0; font-size: 15px; }
+  #toast .body:empty { display: none; }
+  #toast table { width: 100%; border-collapse: collapse; }
+  #toast th { color: #ffd23f; font-size: 13px; }
+  #toast th, #toast td { padding: 4px 6px; text-align: left; }
+  #toast .r { text-align: right; }
+  #toast tr.me td { color: #7dffb0; font-weight: bold; }
+  #ui { position: fixed; pointer-events: none; z-index: 5; }
+  #ui button, #ui input {
+    pointer-events: auto; font: bold 15px Georgia, serif; padding: 9px 16px; border-radius: 8px; border: 2px solid #ffd23f;
+    background: #2a1d4a; color: #ffe27a; cursor: pointer; box-sizing: border-box; min-height: 40px;
+  }
+  #ui input { cursor: text; text-align: center; width: 190px; }
+  #ui #pauseBtn {
+    position: absolute; right: 3%; top: 7%; min-width: 44px; min-height: 44px; padding: 0; font-size: 22px;
+    background: none; border: 0; color: #ffe27a; text-shadow: 0 2px 0 rgba(0,0,0,.7);
+  }
+  #menuRow { position: absolute; left: 0; right: 0; bottom: 4%; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  #menuRow .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="toast" role="alertdialog"><h2></h2><p></p><div class="btns"></div></div>
+<div id="toast" role="alertdialog"><h2></h2><p></p><div class="body"></div><div class="btns"></div></div>
+<div id="ui">
+  <button id="pauseBtn" aria-label="Pause">&#10074;&#10074;</button>
+  <div id="menuRow">
+    <input id="nameIn" maxlength="10" placeholder="Enter your name" autocomplete="off">
+    <div class="row"><button id="scoresBtn">High Scores</button><button id="skinBtn"></button></div>
+  </div>
+</div>
+<script src="skins.js"></script>
 <script>
 (() => {
   const W = 480, H = 720;
@@ -50,12 +77,19 @@
   const CAM_STACK_Y = 420;     // screen y where the top of the stack settles
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
+  // everything a skin needs from the game; t and camY are read live (see skins.js)
+  const SK = createSkins({ ctx, W, H, LAYER, GROUND, rnd, rr, mix, get t() { return t; }, get camY() { return camY; } });
 
   function resize() {
     const dpr = window.devicePixelRatio || 1;
     const r = canvas.getBoundingClientRect();
     canvas.width = Math.round(r.width * dpr);
     canvas.height = Math.round(r.height * dpr);
+    layoutUI();
+  }
+  function layoutUI() {                                   // HTML buttons sit exactly over the canvas
+    const r = canvas.getBoundingClientRect(), s = document.getElementById('ui').style;
+    s.left = r.left + 'px'; s.top = r.top + 'px'; s.width = r.width + 'px'; s.height = r.height + 'px';
   }
   addEventListener('resize', resize); resize();
 
@@ -76,14 +110,28 @@
   }
 
   // ---- state ----
-  let best = 0;
-  try { best = +localStorage.getItem('medovikBest') || 0; } catch (e) {}
+  let scores = [], playerName = 'PLAYER', lastEntry = null, panelEsc = null, panelOpen = false;
+  let skin = 'honey';
+  const unlocked = { honey: true };                       // skin id -> unlocked
+  function save(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  try {
+    scores = JSON.parse(localStorage.getItem('medovikScores')) || [];
+    playerName = localStorage.getItem('medovikName') || playerName;
+    for (const id of SKIN_ORDER) if (SK[id].storeKey) unlocked[id] = localStorage.getItem(SK[id].storeKey) === '1';
+    const sv = localStorage.getItem('medovikSkin');
+    if (SK[sv] && unlocked[sv]) skin = sv;
+  } catch (e) {}
+  function unlockSkin(id) { unlocked[id] = true; save(SK[id].storeKey, '1'); }
+  if (!Array.isArray(scores)) scores = [];
+  const bestPts = () => scores.length ? scores[0].points : 0;
   let state = 'title';         // title | play | over
   const shown = {};
   let speedRandom = false;     // switched on at the 25-layer event
   let testMode = false;        // Konami code: always-perfect drops
   let emergency = false, sirenT = 0, sirenHi = false;   // red alert + shake from 25 layers on
   let blocks, cur, chunks, crumbs, floaters, camY, camTarget, combo, score, perfects, shake, t = 0, overT = 0;
+  const ITEM = { x: 12, y: 46, s: 64 };   // item slot on the canvas, top left under the combo text
+  let hasItem = false, speedBase = 0, points = 0;   // speed ramps from layer speedBase on
 
   const rand = (a, b) => a + Math.random() * (b - a);
   function rnd(seed) { const x = Math.sin(seed * 127.1) * 43758.5453; return x - Math.floor(x); }
@@ -92,8 +140,8 @@
   function reset() {
     blocks = [{ x: (W - BASE_W) / 2, w: BASE_W, seed: 1, squash: 0 }];
     chunks = []; crumbs = []; floaters = [];
-    shown[15] = shown[20] = shown[25] = false; speedRandom = false; emergency = false;
-    camY = 0; combo = 0; score = 0; perfects = 0; shake = 0;
+    shown[15] = shown[20] = shown[24] = shown[25] = false; speedRandom = false; emergency = false;
+    camY = 0; combo = 0; score = 0; perfects = 0; shake = 0; hasItem = false; speedBase = 0; points = 0; lastEntry = null;
     updateCamTarget(); camY = camTarget;
     spawn();
   }
@@ -142,7 +190,7 @@
   }
 
   function burst(x, y, n, spreadX, up, perfect) {
-    const cols = ['#c98a3a', '#a5651f', '#8a4f17', '#e0a850', '#fff3d6', '#f0dba8'];
+    const cols = SK[skin].crumbs;
     for (let i = 0; i < n; i++) {
       crumbs.push({
         x: x + rand(-spreadX, spreadX), y: y + rand(-3, 1),
@@ -165,14 +213,15 @@
 
     if (diff < 5) {                                       // perfect
       combo++; perfects++;
+      const gain = Math.min(100, 30 + 10 * (combo - 1)); points += gain;
       cur.x = top.x;
       if (combo >= 4 && cur.w < BASE_W) cur.w = Math.min(BASE_W, cur.w + 8);
       beep(520 + Math.min(combo, 10) * 55, 0.18, 'triangle');
-      floaters.push({ text: combo > 1 ? 'Perfect x' + combo : 'Perfect!', x: cur.x + cur.w / 2, y: y, age: 0 });
+      floaters.push({ text: (combo > 1 ? 'Perfect x' + combo : 'Perfect!') + ' +' + gain, x: cur.x + cur.w / 2, y: y, age: 0 });
       burst(cur.x + cur.w / 2, contactY, 14, cur.w / 2, 170, true);
       shake = 2;
     } else {
-      combo = 0;
+      combo = 0; points += 10;
       if (cur.x < top.x) {                                // overhang on the left
         chunks.push({ x: cur.x, w: top.x - cur.x, wy: y, vy: 0, vx: -45, rot: 0, vr: -1.4, seed: cur.seed });
         burst(top.x, contactY, 10, 6, 220, false);
@@ -190,7 +239,22 @@
     score = blocks.length - 1;
     updateCamTarget();
     spawn();
+    if (combo > 0 && combo % 3 === 0 && !hasItem) gift();
     milestone(score);
+  }
+
+  function gift() {
+    hasItem = true;
+    showToast('dayum you is a perfect lil stacker aintcha', 'Here is a gift: Slow-Mo. Tap the item in the top left to reset the knife speed back to the start. It ramps up again from there.', [{ label: 'Thanks', fn: resume }]);
+  }
+
+  function useItem() {
+    if (!hasItem || state !== 'play') return false;
+    hasItem = false; speedBase = blocks.length; speedRandom = false;   // speed (and the wobble) restart from the beginning
+    if (cur) cur.mul = cur.mulT = 1;
+    floaters.push({ text: 'Speed reset!', x: W / 2, y: HOVER_Y - camY + 70, age: 0 });
+    beep(400, 0.3, 'triangle', 0.08, 300);
+    return true;
   }
 
   // ---- toasts (milestones pause the game until dismissed) ----
@@ -199,6 +263,7 @@
     state = 'toast';
     toastEl.querySelector('h2').textContent = title;
     toastEl.querySelector('p').textContent = msg;
+    toastEl.querySelector('.body').innerHTML = ''; panelOpen = false; panelEsc = null;
     clearRunner();
     const box = toastEl.querySelector('.btns'); box.innerHTML = '';
     buttons.forEach((b, i) => {
@@ -274,6 +339,11 @@
         { label: 'Yes I do', fn: () => { showToast('Nerd.', '', []); setTimeout(closeGame, 1800); } },
         { label: 'Mind ya business', fn: resume }
       ]);
+    } else if (n === 24 && !shown[24] && !unlocked.tira) {
+      shown[24] = true;
+      showToast('Damn broski, maybe you need some coffee', 'Unlock it, then turn it on in Skins.', [
+        { label: 'Unlock tiramisu skin', fn: () => { unlockSkin('tira'); beep(660, 0.3, 'triangle', 0.08, 300); resume(); } }
+      ]);
     } else if (n === 25 && !shown[25]) {
       shown[25] = true; emergency = true;
       showToast('Is this really a productive use of your time?', '', [
@@ -284,11 +354,76 @@
   }
 
   function gameOver() {
-    state = 'over'; overT = 0;
-    if (score > best && !testMode) { best = score; try { localStorage.setItem('medovikBest', best); } catch (e) {} }
+    state = 'over'; overT = 0; lastEntry = null;
+    if (!testMode && points > 0) {
+      const e = { name: playerName, points, layers: score, perfects, date: Date.now() };
+      scores.push(e); scores.sort((a, b) => b.points - a.points); scores = scores.slice(0, 10);
+      if (scores.includes(e)) { lastEntry = e; save('medovikScores', JSON.stringify(scores)); }
+    }
+    nameIn.value = playerName === 'PLAYER' ? '' : playerName;
+    if (score === 0 && !unlocked.adam && !testMode) {       // missed the very first layer
+      showToast("Wow, you couldn't even land 1 layer. You MUST be AK.", '', [
+        { label: 'Unlock Adam(b) person skin', fn: () => { unlockSkin('adam'); closePanel(); state = 'over'; overT = 0; } }
+      ]);
+    }
   }
 
+  // ---- pause menu, high scores, skins (reuse the toast box) ----
+  function openPanel(title, body, buttons, onEsc) {
+    toastEl.querySelector('h2').textContent = title;
+    toastEl.querySelector('p').textContent = '';
+    const b = toastEl.querySelector('.body'); b.innerHTML = ''; if (body) b.appendChild(body);
+    clearRunner();
+    const box = toastEl.querySelector('.btns'); box.innerHTML = '';
+    buttons.forEach((bt, i) => {
+      const el = document.createElement('button');
+      el.textContent = bt.label; if (i > 0) el.className = 'alt';
+      el.onclick = () => { el.blur(); bt.fn(); };
+      box.appendChild(el);
+    });
+    panelOpen = true; panelEsc = onEsc || null;
+    toastEl.classList.add('show');
+  }
+  function closePanel() { toastEl.classList.remove('show'); panelOpen = false; panelEsc = null; }
+  function showSkins(back) {
+    const body = document.createElement('div');
+    const hints = SKIN_ORDER.filter(id => !unlocked[id]).map(id => SK[id].hint);
+    body.textContent = hints.length ? hints.join(' ') : 'Pick a skin.';
+    const btns = SKIN_ORDER.map(id => ({
+      label: SK[id].name + (skin === id ? ' (on)' : !unlocked[id] ? ' (locked)' : ''),
+      fn: () => { if (!unlocked[id]) return; skin = id; save('medovikSkin', skin); showSkins(back); }
+    }));
+    btns.push({ label: 'Back', fn: back });
+    openPanel('Skins', body, btns, back);
+  }
+  function showScores(back) {
+    const wrap = document.createElement('div');
+    if (!scores.length) wrap.textContent = 'No scores yet. Go stack something!';
+    else {
+      const tb = document.createElement('table');
+      tb.innerHTML = '<tr><th>#</th><th>Name</th><th class="r">Points</th><th class="r">Layers</th></tr>';
+      scores.forEach((s, i) => {
+        const tr = document.createElement('tr'); if (s === lastEntry) tr.className = 'me';
+        [i + 1, s.name, s.points, s.layers].forEach((v, j) => {
+          const td = document.createElement('td'); td.textContent = v; if (j > 1) td.className = 'r'; tr.appendChild(td);
+        });
+        tb.appendChild(tr);
+      });
+      wrap.appendChild(tb);
+    }
+    openPanel('High Scores', wrap, [{ label: 'Back', fn: back }], back);
+  }
+  function pause() {
+    state = 'paused';
+    const btns = [{ label: 'Resume', fn: unpause }, { label: 'High Scores', fn: () => showScores(pause) }];
+    btns.push({ label: 'Skins', fn: () => showSkins(pause) });
+    btns.push({ label: 'Restart', fn: () => { closePanel(); reset(); state = 'play'; } });
+    openPanel('Paused', null, btns, unpause);
+  }
+  function unpause() { closePanel(); state = 'play'; }
+
   function press() {
+    if (panelOpen) return;
     if (state === 'title') { reset(); state = 'play'; beep(440, 0.1); }
     else if (state === 'play') { if (cur && cur.mode === 'slide') release(); }
     else if (state === 'over' && overT > 0.6) { reset(); state = 'play'; }
@@ -305,10 +440,18 @@
     }
   });
   addEventListener('keydown', e => {
+    if (e.code === 'Escape') { if (!e.repeat) { if (panelEsc) panelEsc(); else if (state === 'play') pause(); } return; }
+    if (e.target && e.target.tagName === 'INPUT') { if (e.code === 'Enter') e.target.blur(); return; }   // typing a name
     if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); if (!e.repeat) press(); }
     if (e.code === 'KeyM') muted = !muted;
+    if (e.code === 'KeyE' && !e.repeat) useItem();
   });
-  canvas.addEventListener('pointerdown', e => { e.preventDefault(); press(); });
+  canvas.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    const r = canvas.getBoundingClientRect(), px = (e.clientX - r.left) / r.width * W, py = (e.clientY - r.top) / r.height * H, m = 8;
+    if (hasItem && px >= ITEM.x - m && px <= ITEM.x + ITEM.s + m && py >= ITEM.y - m && py <= ITEM.y + ITEM.s + m) { useItem(); return; }
+    press();
+  });
 
   // ---- cake drawing ----
   function rr(x, y, w, h, r) {
@@ -320,139 +463,14 @@
     ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y); ctx.closePath();
   }
 
-  // y = top of the cream; the layer is LAYER tall
-  function drawLayer(x, w, y, seed, topping) {
-    const cream = 11, bodyY = y + cream - 3, bodyH = LAYER - cream + 3;
-    ctx.save();
-
-    // honey cake body with toasted edges
-    rr(x, bodyY, w, bodyH, 4);
-    const gx = ctx.createLinearGradient(x, 0, x + w, 0);
-    gx.addColorStop(0, '#7d4413'); gx.addColorStop(0.07, '#b06f26'); gx.addColorStop(0.5, '#d09442');
-    gx.addColorStop(0.93, '#b06f26'); gx.addColorStop(1, '#7d4413');
-    ctx.fillStyle = gx; ctx.fill();
-    ctx.save();
-    ctx.clip();
-    const gy = ctx.createLinearGradient(0, bodyY, 0, bodyY + bodyH);
-    gy.addColorStop(0, 'rgba(255,225,150,.12)'); gy.addColorStop(0.55, 'rgba(0,0,0,0)'); gy.addColorStop(1, 'rgba(50,20,0,.4)');
-    ctx.fillStyle = gy; ctx.fillRect(x, bodyY, w, bodyH);
-    // pores and crumb texture
-    const count = Math.max(4, Math.floor(w / 7));
-    for (let i = 0; i < count; i++) {
-      const px = x + 3 + rnd(seed + i * 1.3) * (w - 6), py = bodyY + 5 + rnd(seed * 3 + i) * (bodyH - 9);
-      const s = 0.8 + rnd(seed + i * 5) * 1.6;
-      ctx.fillStyle = 'rgba(85,42,8,.5)';
-      ctx.beginPath(); ctx.ellipse(px, py, s * 1.3, s * 0.8, 0, 0, 7); ctx.fill();
-      ctx.fillStyle = 'rgba(255,220,150,.5)';
-      ctx.fillRect(px + s, py - s, 1.5, 1);
-    }
-    // crumbly baked bottom edge
-    ctx.fillStyle = 'rgba(70,30,0,.45)'; ctx.fillRect(x, bodyY + bodyH - 3, w, 3);
-    for (let i = 0; i < w / 5; i++) {
-      ctx.fillStyle = 'rgba(70,30,0,.5)';
-      ctx.fillRect(x + i * 5 + rnd(seed + i) * 3, bodyY + bodyH - 4 - rnd(seed + i * 2) * 2, 2, 2);
-    }
-    ctx.restore();
-
-    // cream shadow on the cake just below
-    ctx.fillStyle = 'rgba(60,25,0,.3)'; ctx.fillRect(x + 2, y + cream - 1, w - 4, 3);
-
-    // cream drips
-    ctx.fillStyle = '#f6e8c3';
-    const drips = Math.max(2, Math.floor(w / 45));
-    for (let i = 0; i < drips; i++) {
-      const dx = x + 10 + rnd(seed * 2 + i) * (w - 24), dh = 3 + rnd(seed + i * 9) * 4;
-      rr(dx, y + cream - 4, 7, dh + 4, 3); ctx.fill();
-    }
-    // cream layer, slightly bulging past the cake
-    rr(x - 2, y, w + 4, cream, 5);
-    const gc = ctx.createLinearGradient(0, y, 0, y + cream);
-    gc.addColorStop(0, '#fffdf4'); gc.addColorStop(1, '#f1dfb2');
-    ctx.fillStyle = gc; ctx.fill();
-    ctx.fillStyle = 'rgba(255,255,255,.75)'; rr(x + 3, y + 1.5, w - 6, 2, 1); ctx.fill();
-    ctx.fillStyle = 'rgba(200,160,90,.35)'; ctx.fillRect(x, y + cream - 2, w, 1.5);
-
-    // crumb topping on the top layer of the cake
-    if (topping) {
-      const n = Math.floor(w / 3.5);
-      for (let i = 0; i < n; i++) {
-        const px = x + 1 + rnd(seed * 4 + i * 1.7) * (w - 2), py = y - 1 + rnd(seed + i * 3.1) * 4;
-        ctx.fillStyle = ['#b9772a', '#8a4f17', '#d9a257', '#a5651f'][(i + seed) & 3];
-        ctx.fillRect(px, py, 2 + rnd(i + seed) * 2, 2 + rnd(i * 2 + seed) * 1.5);
-      }
-    }
-    ctx.restore();
-  }
-
-  // cake server / palette knife carrying the layer; y = top of the blade
-  function drawKnife(c, y) {
-    if (c.knifeOff > 900) return;
-    const hd = c.hd, off = c.knifeOff * hd;
-    const tip = hd < 0 ? c.x + c.w + 12 : c.x - 12;      // blade tip, far from the handle
-    const base = hd < 0 ? c.x - 4 : c.x + c.w + 4;       // where the blade meets the neck
-    ctx.save();
-    ctx.translate(off, 0);
-    // blade
-    ctx.beginPath();
-    ctx.moveTo(base, y); ctx.lineTo(tip - hd * 8, y);
-    ctx.quadraticCurveTo(tip, y + 1, tip, y + 4);
-    ctx.quadraticCurveTo(tip - hd * 6, y + 6, tip - hd * 14, y + 5);
-    ctx.lineTo(base, y + 5); ctx.closePath();
-    const g = ctx.createLinearGradient(0, y, 0, y + 6);
-    g.addColorStop(0, '#f4f7fb'); g.addColorStop(1, '#9aa3b3');
-    ctx.fillStyle = g; ctx.fill();
-    // neck and handle
-    const nx = base + hd * 46;
-    ctx.strokeStyle = '#aab2c0'; ctx.lineWidth = 3; ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.moveTo(base, y + 2.5); ctx.lineTo(nx, y + 2.5); ctx.stroke();
-    const hx = hd > 0 ? nx : nx - 100;
-    rr(hx, y - 4, 100, 12, 6);
-    const gh = ctx.createLinearGradient(0, y - 4, 0, y + 8);
-    gh.addColorStop(0, '#9b5b25'); gh.addColorStop(1, '#5b3213');
-    ctx.fillStyle = gh; ctx.fill();
-    ctx.fillStyle = '#d7b34a'; ctx.fillRect(hd > 0 ? nx : nx - 6, y - 4, 6, 12);   // brass ferrule
-    ctx.restore();
-  }
-
-  // ---- other drawing ----
-  function drawBee(x, y, tt) {
-    ctx.save(); ctx.translate(x, y);
-    ctx.fillStyle = 'rgba(255,255,255,.7)';
-    const fl = Math.sin(tt * 40) * 3;
-    ctx.beginPath(); ctx.ellipse(-3, -7, 5, 3 + fl * 0.3, -0.5, 0, 7); ctx.fill();
-    ctx.beginPath(); ctx.ellipse(4, -7, 5, 3 - fl * 0.3, 0.5, 0, 7); ctx.fill();
-    ctx.fillStyle = '#f7c21b'; ctx.beginPath(); ctx.ellipse(0, 0, 8, 5.5, 0, 0, 7); ctx.fill();
-    ctx.fillStyle = '#222'; ctx.fillRect(-2, -5, 2.5, 10); ctx.fillRect(3, -4.5, 2.5, 9);
-    ctx.beginPath(); ctx.arc(-8, 0, 3.2, 0, 7); ctx.fill();
-    ctx.restore();
-  }
+  // y = top of the layer; the layer is LAYER tall
+  function drawLayer(x, w, y, seed, topping) { SK[skin].layer(x, w, y, seed, topping); }
+  function drawKnife(c, y) { if (c.knifeOff <= 900) SK[skin].tool(c, y); }   // y = bottom of the layer
 
   function mix(a, b, p) { return `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * p)).join(',')})`; }
 
-  function drawBackground() {
-    const p = Math.min(1, camY / 1800);
-    const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, mix([58, 80, 160], [12, 10, 40], p));
-    g.addColorStop(1, mix([255, 205, 120], [90, 60, 130], p));
-    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = 'rgba(255,255,255,' + (0.15 + p * 0.8) + ')';
-    for (let i = 0; i < 40; i++) {
-      const x = rnd(i) * W, y = ((rnd(i + 99) * H * 1.4 + camY * 0.15) % H);
-      ctx.fillRect(x, y, 2, 2);
-    }
-    const gy = GROUND + camY;
-    if (gy < H + 100) {
-      ctx.fillStyle = '#3d6b2e'; ctx.fillRect(0, gy + 14, W, H);
-      for (let i = 0; i < 14; i++) {
-        const fx = 20 + i * 36, fy = gy + 14, hh = 8 + rnd(i) * 10;
-        ctx.strokeStyle = '#2d5a22'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(fx, fy + 30); ctx.lineTo(fx, fy - hh + 2); ctx.stroke();
-        ctx.fillStyle = '#ffd23f'; ctx.beginPath(); ctx.arc(fx, fy - hh, 9, 0, 7); ctx.fill();
-        ctx.fillStyle = '#5a3a14'; ctx.beginPath(); ctx.arc(fx, fy - hh, 4.5, 0, 7); ctx.fill();
-      }
-      ctx.fillStyle = '#e9e6f2'; ctx.fillRect((W - 300) / 2, gy, 300, 8);
-      ctx.fillStyle = '#b8b3cf'; ctx.fillRect((W - 300) / 2, gy + 8, 300, 4);
-    }
-  }
+  // the active skin (see skins.js) does the drawing
+  function drawBackground() { SK[skin].background(); }
 
   function text(s, x, y, size, color = '#fff', align = 'center', stroke = 'rgba(0,0,0,.45)') {
     ctx.font = `bold ${size}px Georgia, serif`; ctx.textAlign = align;
@@ -465,7 +483,7 @@
   function frame(now) {
     if (state === 'closed') return;
     const dt = Math.min(0.033, (now - last) / 1000); last = now; t += dt;
-    update(dt); render(); requestAnimationFrame(frame);
+    update(dt); render(); syncUI(); requestAnimationFrame(frame);
   }
 
   function update(dt) {
@@ -477,7 +495,8 @@
           if (cur.mulTimer <= 0) { cur.mulT = rand(0.5, 1.7); cur.mulTimer = rand(0.25, 0.9); }
           cur.mul += (cur.mulT - cur.mul) * Math.min(1, dt * 8);
         }
-        cur.phase += (peakSpeed(blocks.length) * cur.mul / (W / 2)) * dt;
+        const spd = peakSpeed(blocks.length - speedBase) * cur.mul;
+        cur.phase += (spd / (W / 2)) * dt;
         slideX();
       } else if (cur.mode === 'slip') {
         cur.knifeOff += 2800 * dt;
@@ -579,7 +598,7 @@
       ctx.restore();
     }
 
-    drawBee(W / 2 + Math.sin(t * 0.8) * 190, 190 + Math.sin(t * 1.7) * 30 + Math.cos(t * 0.5) * 20, t);
+    SK[skin].mascot();
     ctx.restore();
 
     // emergency red light: pulsing wash, vignette and a sweeping beacon beam
@@ -607,9 +626,18 @@
 
     // HUD
     if (state === 'play' || state === 'over') {
-      text(String(score), W / 2, 66, 52);
-      text('BEST ' + best, W - 16, 34, 18, '#ffe27a', 'right');
+      text(String(points), W / 2, 66, 52);
+      text('layers ' + score, W / 2, 92, 16, '#ffe9b0');
+      text('BEST ' + Math.max(bestPts(), points), W - 16, 34, 18, '#ffe27a', 'right');
       if (state === 'play' && combo > 1) text('combo ' + combo, 16, 34, 18, '#ffe27a', 'left');
+      if (hasItem) {
+        const { x, y, s } = ITEM, p2 = 0.5 + 0.5 * Math.sin(t * 5);
+        ctx.save();
+        ctx.font = (46 + p2 * 4) + 'px serif'; ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
+        ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 6;
+        ctx.fillText('🐌', x + s / 2, y + 48);
+        ctx.restore();
+      }
     }
     const pulse = 0.65 + 0.35 * Math.sin(t * 4);
     if (state === 'title') {
@@ -620,7 +648,7 @@
       text('Tap / Space to release the layer', W / 2, 368, 17);
       text('Miss the edge and the cake gets trimmed...', W / 2, 396, 15, '#ffe9b0');
       ctx.globalAlpha = pulse; text('Press Space or tap to start', W / 2, 470, 22, '#ffd23f'); ctx.globalAlpha = 1;
-      if (best) text('Best: ' + best + ' layers', W / 2, 520, 18);
+      if (bestPts()) text('Best: ' + bestPts() + ' pts', W / 2, 520, 18);
       ctx.fillStyle = '#0057b7'; ctx.fillRect(0, 0, W, 8);
       ctx.fillStyle = '#ffd700'; ctx.fillRect(0, 8, W, 8);
     }
@@ -629,12 +657,30 @@
       ctx.fillStyle = `rgba(20,10,40,${0.55 * a})`; ctx.fillRect(0, 0, W, H);
       ctx.globalAlpha = a;
       text('Cake collapsed!', W / 2, 250, 42, '#ff8a6b');
-      text(score + ' layers', W / 2, 320, 36);
-      text(score >= best && score > 0 ? 'New best!' : 'Best: ' + best, W / 2, 360, 20, '#ffe27a');
-      text('Perfect drops: ' + perfects, W / 2, 392, 16);
+      text(points + ' pts', W / 2, 320, 36);
+      text(score + ' layers  |  ' + perfects + ' perfect drops', W / 2, 352, 16);
+      text(lastEntry && lastEntry === scores[0] ? 'New best!' : lastEntry ? 'Top 10 score!' : 'Best: ' + bestPts(), W / 2, 388, 20, '#ffe27a');
       ctx.globalAlpha = 1;
       if (overT > 0.6) { ctx.globalAlpha = pulse; text('Space or tap to retry', W / 2, 460, 22, '#ffd23f'); ctx.globalAlpha = 1; }
     }
+  }
+
+  // ---- HTML buttons over the canvas ----
+  const pauseBtn = document.getElementById('pauseBtn'), menuRow = document.getElementById('menuRow');
+  const nameIn = document.getElementById('nameIn'), scoresBtn = document.getElementById('scoresBtn'), skinBtn = document.getElementById('skinBtn');
+  pauseBtn.onclick = () => { pauseBtn.blur(); if (state === 'play') pause(); };
+  scoresBtn.onclick = () => { scoresBtn.blur(); showScores(closePanel); };
+  skinBtn.onclick = () => { skinBtn.blur(); showSkins(closePanel); };
+  skinBtn.textContent = 'Skins';
+  const touchUI = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;   // pause button is for phones only
+  nameIn.addEventListener('input', () => {
+    playerName = nameIn.value.trim().slice(0, 10) || 'PLAYER'; save('medovikName', playerName);
+    if (lastEntry) { lastEntry.name = playerName; save('medovikScores', JSON.stringify(scores)); }
+  });
+  function syncUI() {
+    pauseBtn.style.display = state === 'play' && touchUI ? '' : 'none';
+    menuRow.style.display = (state === 'title' || state === 'over') && !panelOpen ? '' : 'none';
+    nameIn.style.display = state === 'over' && lastEntry ? '' : 'none';
   }
 
   reset();
