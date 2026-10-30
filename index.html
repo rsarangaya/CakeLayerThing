@@ -387,11 +387,10 @@
   function closePanel() { toastEl.classList.remove('show'); panelOpen = false; panelEsc = null; }
   function showSkins(back) {
     const body = document.createElement('div');
-    const hints = SKIN_ORDER.filter(id => !unlocked[id]).map(id => SK[id].hint);
-    body.textContent = hints.length ? hints.join(' ') : 'Pick a skin.';
-    const btns = SKIN_ORDER.map(id => ({
-      label: SK[id].name + (skin === id ? ' (on)' : !unlocked[id] ? ' (locked)' : ''),
-      fn: () => { if (!unlocked[id]) return; skin = id; save('medovikSkin', skin); showSkins(back); }
+    body.textContent = 'Pick a skin.';
+    const btns = SKIN_ORDER.filter(id => unlocked[id]).map(id => ({   // locked skins stay hidden
+      label: SK[id].name + (skin === id ? ' (on)' : ''),
+      fn: () => { skin = id; save('medovikSkin', skin); showSkins(back); }
     }));
     btns.push({ label: 'Back', fn: back });
     openPanel('Skins', body, btns, back);

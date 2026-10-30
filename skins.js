@@ -197,7 +197,14 @@ function createSkins(E) {
     const bags = ['#161a16', '#222b22', '#2c382c', '#1d2230', '#33332a'];
     const junk = ['#c94b3a', '#d8d2b8', '#4a7bc2', '#e0c04a', '#9a9a9a', '#7a4a2a'];
     ctx.save();
-    rr(x - 1, y + 2, w + 2, LAYER - 2, 9); ctx.clip();
+    const steps = Math.max(2, Math.round(w / 7)), jag = (k, a) => rnd(seed + k * a);
+    ctx.beginPath();                                       // ragged outline: torn bags and loose rubbish
+    ctx.moveTo(x, y + 8);
+    for (let i = 0; i <= steps; i++) ctx.lineTo(x + w * i / steps + (jag(i, 2.1) - 0.5) * 3, y + 1 + jag(i, 3.7) * 6);
+    ctx.lineTo(x + w + 1, y + 11); ctx.lineTo(x + w - 2 + jag(50, 1) * 3, y + 20); ctx.lineTo(x + w + 1, y + LAYER - 9); ctx.lineTo(x + w - 1, y + LAYER - 3);
+    for (let i = steps; i >= 0; i--) ctx.lineTo(x + w * i / steps + (jag(i, 4.3) - 0.5) * 3, y + LAYER - 1 - jag(i, 5.3) * 5);
+    ctx.lineTo(x - 1, y + LAYER - 10); ctx.lineTo(x + 2, y + 19); ctx.lineTo(x - 1, y + 13); ctx.closePath();
+    ctx.clip();
     ctx.fillStyle = '#10130f'; ctx.fillRect(x - 2, y, w + 4, LAYER);
     const n = Math.max(2, Math.ceil(w / 30));
     for (let i = 0; i < n; i++) {                          // lumpy bin bags
@@ -217,6 +224,15 @@ function createSkins(E) {
     }
     ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect(x - 2, y + LAYER - 6, w + 4, 6);
     ctx.restore();
+    ctx.fillStyle = '#1c241c';                             // torn plastic flaps poking out of the edges
+    for (let k = 0; k < Math.floor(w / 45) + 1; k++) {
+      const fx = x + 8 + jag(k + 90, 1.3) * Math.max(1, w - 16);
+      ctx.beginPath(); ctx.moveTo(fx - 5, y + 5); ctx.lineTo(fx + jag(k, 7) * 8 - 3, y - 3 - jag(k + 5, 2) * 3); ctx.lineTo(fx + 5, y + 6); ctx.closePath(); ctx.fill();
+    }
+    for (const d of [-1, 1]) {
+      const sx = d < 0 ? x : x + w, sy = y + 10 + jag(d + 3, 9) * 14;
+      ctx.beginPath(); ctx.moveTo(sx, sy - 4); ctx.lineTo(sx + d * (4 + jag(d + 7, 3) * 4), sy + 1); ctx.lineTo(sx, sy + 5); ctx.closePath(); ctx.fill();
+    }
     if (topping) {                                         // tied-off bag knots on the very top
       ctx.fillStyle = '#222b22';
       for (let k = 0; k < Math.max(1, Math.floor(w / 70)); k++) {
@@ -241,22 +257,29 @@ function createSkins(E) {
     }
   }
 
-  function fly(x, y, tt) {
-    ctx.save(); ctx.translate(x + Math.sin(tt * 23) * 1.2, y + Math.cos(tt * 29) * 1.2);
-    const fl = Math.sin(tt * 60) * 2;
-    ctx.fillStyle = 'rgba(210,230,255,.6)';
-    ctx.beginPath(); ctx.ellipse(-3, -5, 6, 2.5 + fl * 0.3, -0.4, 0, 7); ctx.fill();
-    ctx.beginPath(); ctx.ellipse(3, -5, 6, 2.5 - fl * 0.3, 0.4, 0, 7); ctx.fill();
-    ctx.fillStyle = '#1b1b1b'; ctx.beginPath(); ctx.ellipse(0, 0, 6, 3.8, 0, 0, 7); ctx.fill();
-    ctx.fillStyle = '#b22'; ctx.beginPath(); ctx.arc(-6, -1, 2.2, 0, 7); ctx.fill();
+  function fly(x, y, tt, dir) {                            // small black fly, wings a blur
+    ctx.save(); ctx.translate(x, y); ctx.scale(dir, 1);
+    const fl = Math.sin(tt * 90);
+    ctx.fillStyle = 'rgba(200,215,230,.35)';
+    ctx.beginPath(); ctx.ellipse(-1, -3.5, 3.6, 1.2 + Math.abs(fl) * 1.2, -0.5 - fl * 0.3, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(1.5, -3.5, 3.6, 1.2 + Math.abs(fl) * 1.2, 0.3 + fl * 0.3, 0, 7); ctx.fill();
+    ctx.fillStyle = '#060606';
+    ctx.beginPath(); ctx.ellipse(0.6, 0, 3.4, 2.1, 0, 0, 7); ctx.fill();            // body
+    ctx.beginPath(); ctx.arc(-2.6, 0.2, 1.7, 0, 7); ctx.fill();                      // head
+    ctx.strokeStyle = '#060606'; ctx.lineWidth = 0.6;                                 // legs
+    ctx.beginPath(); ctx.moveTo(-1, 1.5); ctx.lineTo(-2, 3.5); ctx.moveTo(1, 1.8); ctx.lineTo(1.5, 3.8); ctx.moveTo(2.5, 1.5); ctx.lineTo(3.5, 3.5); ctx.stroke();
     ctx.restore();
   }
 
-  function flies() {
+  function flies() {                                       // drift along a slow path, but dart and jitter like real flies
     const t = E.t;
-    for (let i = 0; i < 3; i++) {
-      fly(W / 2 + Math.sin(t * (0.7 + i * 0.4) + i * 2) * 180 + Math.sin(t * 9 + i) * 10,
-        190 + i * 55 + Math.sin(t * (1.5 + i) + i) * 28 + Math.cos(t * 8 + i) * 6, t + i);
+    for (let i = 0; i < 4; i++) {
+      const s = t * 5 + i * 3.1, k = Math.floor(s), f = s - k, e = f * f * (3 - 2 * f);   // short darts between random spots
+      const hx = (rnd(k + i * 17) - 0.5) * 90, hy = (rnd(k + i * 31 + 7) - 0.5) * 60;
+      const nx = (rnd(k + 1 + i * 17) - 0.5) * 90, ny = (rnd(k + 1 + i * 31 + 7) - 0.5) * 60;
+      const bx = W / 2 + Math.sin(t * (0.35 + i * 0.13) + i * 2) * 170, by = 200 + i * 45 + Math.sin(t * (0.6 + i * 0.2) + i) * 30;
+      const x = bx + hx + (nx - hx) * e + Math.sin(t * 61 + i) * 2.2, y = by + hy + (ny - hy) * e + Math.cos(t * 67 + i) * 2.2;
+      fly(x, y, t + i, nx > hx ? 1 : -1);
     }
   }
 
